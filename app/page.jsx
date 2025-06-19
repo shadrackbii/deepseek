@@ -1,7 +1,7 @@
 'use client'
 
 import { assets } from "@/assets/assets";
-import Message from "@/components/message";
+import Message from "@/components/Message";
 import PromptBox from "@/components/PromptBox";
 import Sidebar from "@/components/Sidebar";
 import Image from "next/image";
