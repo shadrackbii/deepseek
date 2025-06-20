@@ -1,52 +1,75 @@
-import { Webhook } from "svix";
-import connectDB from "@/db";
-import User from "@/models/User";
-import { headers } from "next/headers";
-import { NextRequest } from "next/server";
-
+import { Webhook } from 'svix';
+import connectDB from '@/db';
+import User from '@/models/User';
+import { headers } from 'next/headers';
+import { NextResponse } from 'next/server';
 
 export async function POST(req) {
-    const wh = new Webhook(process.env.SIGNING_SECRET)
-    const headerPayLoad = await headers()
-    const svixHeaders = {
-        "svix-id": headerPayLoad.get("svix-id"),
-        "svix-timestamp": headerPayLoad.get("svix-timestamp"),
-        "svix-signature": headerPayLoad.get("svix-signature"),
-    };
+  const wh = new Webhook(process.env.SIGNING_SECRET);
+  const headerPayLoad = await headers();
+  const svixHeaders = {
+    'svix-id': headerPayLoad.get('svix-id'),
+    'svix-timestamp': headerPayLoad.get('svix-timestamp'),
+    'svix-signature': headerPayLoad.get('svix-signature'),
+  };
 
-    // Get the payload and verify it
-
+  try {
+    // Get and verify payload
     const payload = await req.json();
     const body = JSON.stringify(payload);
-    const {data, type} = wh.verify(body, svixHeaders)
+    let data, type;
+    try {
+      ({ data, type } = wh.verify(body, svixHeaders));
+      console.log('Webhook payload data:', data);
+    } catch (error) {
+      console.error('Webhook verification failed:', error);
+      return NextResponse.json({ error: 'Invalid webhook signature' }, { status: 400 });
+    }
 
-    //Prepare the user data to be saved in the database
+    // Validate required fields
+    if (!data.email_addresses || !Array.isArray(data.email_addresses) || !data.email_addresses[0]) {
+      console.error('Invalid payload: missing email_addresses', data);
+      return NextResponse.json({ error: 'Invalid payload: missing email_addresses' }, { status: 400 });
+    }
 
+    // Prepare user data
     const userData = {
-        _id: data.id,
-        email: data.email_addresses[0].email_address,
-        name:  `${data.first_name} ${data.last_name}`,
-        image: data.image_url,
+      _id: data.id,
+      email: data.email_addresses[0].email_address,
+      name: `${data.first_name || ''} ${data.last_name || ''}`.trim() || 'Unknown',
+      image: data.image_url || '',
     };
 
-    await connectDB();
+    // Connect to MongoDB
+    try {
+      await connectDB();
+    } catch (error) {
+      console.error('MongoDB connection failed:', error);
+      return NextResponse.json({ error: 'Database connection failed' }, { status: 500 });
+    }
 
-     switch (type) {
-        case 'user.created':
-            await User.create(userData)    
-            break;
-      
-        case 'user.updated':
-            await User.findByIdAndUpdate(data.id, userData)    
-            break;
+    // Handle webhook event
+    switch (type) {
+      case 'user.created':
+        await User.create(userData);
+        console.log('User created:', userData._id);
+        break;
+      case 'user.updated':
+        await User.findByIdAndUpdate(data.id, userData, { new: true });
+        console.log('User updated:', userData._id);
+        break;
+      case 'user.deleted':
+        await User.findByIdAndDelete(data.id);
+        console.log('User deleted:', data.id);
+        break;
+      default:
+        console.log('Unhandled event type:', type);
+        break;
+    }
 
-        case 'user.deleted':
-            await User.findByIdAndDelete(data.id)    
-            break;
-
-        default:
-            break;
-     }
-
-     return NextRequest.json({message: "Event received"});
+    return NextResponse.json({ message: 'Event received' });
+  } catch (error) {
+    console.error('Error processing webhook:', error);
+    return NextResponse.json({ error: error.message }, { status: 500 });
+  }
 }
